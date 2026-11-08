@@ -7,8 +7,6 @@ find_package(X11 REQUIRED)
 find_package(KF6Config REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
 find_package(KF6GlobalAccel REQUIRED)
-find_package(Dtk6Core REQUIRED)
-find_package(Dtk6Log REQUIRED)
 find_package(PkgConfig REQUIRED)
 
 
@@ -56,7 +54,6 @@ target_include_directories(
     ${TARGET_NAME}
     PRIVATE
     ${GSETTINGS_INCLUDE_DIRS}
-    ${Dtk6Core_INCLUDE_DIRS}
 )
 
 target_link_libraries(
@@ -66,8 +63,6 @@ target_link_libraries(
     KF6::ConfigCore
     KF6::WindowSystem
     KF6::GlobalAccel
-    Dtk6::Core
-    ${Dtk6Core_LIBRARIES}
     ${GSETTINGS_LDFLAGS}
 )
 
