@@ -16,7 +16,8 @@
 #include <KF6/KConfigCore/KConfig>
 #include <KF6/KConfigCore/KConfigGroup>
 #include <KF6/KConfigCore/KSharedConfig>
-#include <KF6/KWindowSystem/KWindowSystem>
+#include <KF6/KWindowSystem/KX11Extras>
+#include <KF6/KWindowSystem/KWindowInfo>
 #include <KF6/KWindowSystem/KWindowEffects>
 #include <KF6/KGlobalAccel/KGlobalAccel>
 
@@ -39,11 +40,11 @@ Q_GLOBAL_STATIC_WITH_ARGS(QGSettings, _gsettings_dde_zone, ("com.deepin.dde.zone
 #define DeepinWMGeneralGroupName "General"
 #define DeepinWMWorkspaceBackgroundGroupName "WorkspaceBackground"
 
-#define KWinConfigName "kwinrc"
+#define KWinConfigName "gxde-kwin_x11rc"
 #define KWinCloseWindowGroupName "Script-closewindowaction"
 #define KWinRunCommandGroupName "Script-runcommandaction"
 
-#define GlobalAccelComponentName "deepin-kwin"
+#define GlobalAccelComponentName "gxde-kwin_x11"
 #define GlobalAccelComponentDisplayName "KWin"
 
 // kwin dbus
@@ -310,20 +311,16 @@ DeepinWMFaker::DeepinWMFaker(QObject *parent)
     , m_globalAccel(KGlobalAccel::self())
     , m_previewWinMiniPair(QPair<uint, bool>(-1, false))
 {
-    if (QFile::exists(QDir::homePath() + "/.config/" + DeepinWMGeneralGroupName)) {
-        QFile::remove(QDir::homePath() + "/.config/" + DeepinWMGeneralGroupName);
-    }
     m_isPlatformX11 = isX11Platform();
 #ifndef DISABLE_DEEPIN_WM
-    m_currentDesktop = m_kwinConfig->group("Workspace").readEntry<int>("CurrentDesktop", 1);
+    m_currentDesktop = KX11Extras::currentDesktop();
 
-    // TODO: KF6 中 currentDesktopChanged 和 numberOfDesktopsChanged 信号已被移除
-    // 需要通过 D-Bus 监听 KWin 的虚拟桌面变化信号
-    // connect(m_windowSystem, &KWindowSystem::currentDesktopChanged, this, [this] (int to) {
-    //     Q_EMIT WorkspaceSwitched(m_currentDesktop, to);
-    //     m_currentDesktop = to;
-    // });
-    // connect(m_windowSystem, &KWindowSystem::numberOfDesktopsChanged, this, &DeepinWMFaker::workspaceCountChanged);
+    connect(KX11Extras::self(), &KX11Extras::currentDesktopChanged, this, [this](int to) {
+        Q_EMIT WorkspaceSwitched(m_currentDesktop, to);
+        m_currentDesktop = to;
+    });
+    connect(KX11Extras::self(), &KX11Extras::numberOfDesktopsChanged,
+            this, &DeepinWMFaker::workspaceCountChanged);
     connect(_gsettings_dde_appearance, &QGSettings::changed, this, &DeepinWMFaker::onGsettingsDDEAppearanceChanged);
     connect(_gsettings_dde_zone, &QGSettings::changed, this, &DeepinWMFaker::onGsettingsDDEZoneChanged);
 
@@ -661,7 +658,7 @@ QStringList DeepinWMFaker::GetAccel(const QString &id) const
 static QMap<QString, QList<QKeySequence>> getShoutcutListFromKDEConfigFile()
 {
     // 认为系统配置文件中存储的快捷键为默认值
-    KConfig kglobalshortcutsrc("/etc/xdg/kglobalshortcutsrc");
+    KConfig kglobalshortcutsrc("/usr/share/gxde-wm-dbus/kglobalshortcutsrc");
     KConfigGroup kwin(&kglobalshortcutsrc, "kwin");
 
     if (!kwin.isValid())
@@ -950,10 +947,10 @@ void DeepinWMFaker::ToggleActiveWindowMaximize()
 
 void DeepinWMFaker::MinimizeActiveWindow()
 {
-    // TODO: KF6 中 minimizeWindow 和 activeWindow 已被移除
-    // 需要通过 D-Bus 实现窗口最小化
-    // m_windowSystem->minimizeWindow(m_windowSystem->activeWindow());
-    qWarning() << "MinimizeActiveWindow not fully implemented for KF6";
+    const WId window = KX11Extras::activeWindow();
+    if (window) {
+        KX11Extras::minimizeWindow(window);
+    }
 }
 
 void DeepinWMFaker::SetDecorationTheme(const QString &type, const QString &name)
@@ -972,32 +969,17 @@ void DeepinWMFaker::SetDecorationDeepinTheme(const QString &name)
 
 void DeepinWMFaker::setCompositingEnabled(bool on)
 {
-    m_kwinConfig->group("Compositing").writeEntry("Enabled", on);
-    // 只同步配置文件，不要通知kwin重新加载配置
-    m_kwinConfig->sync();
-
-    if (compositingEnabled() == on) {
+    if (!compositingAllowSwitch() || compositingEnabled() == on) {
         return;
     }
-    QDBusMessage dbus;
-    if (on) {
-        dbus = QDBusMessage::createMethodCall("org.kde.KWin",
-                                              "/Compositor",
-                                              "org.kde.kwin.Compositing",
-                                              "resume");
-        //m_kwinUtilsInter->resume();
-    }
-    else {
-        dbus = QDBusMessage::createMethodCall("org.kde.KWin",
-                                              "/Compositor",
-                                              "org.kde.kwin.Compositing",
-                                              "suspend");
-        //m_kwinUtilsInter->suspend();
-    }
-    QDBusMessage res = QDBusConnection::sessionBus().call(dbus);
 
-    if (compositingEnabled() == on)
-        emit compositingEnabledChanged(on);
+    m_kwinConfig->group("Compositing").writeEntry("Enabled", on);
+    m_kwinConfig->sync();
+
+    // KWin 6.7 exposes reconfigure on /KWin, but no suspend/resume on /Compositor.
+    QDBusInterface(KWinDBusService, KWinDBusPath, "org.kde.KWin")
+        .call(QDBus::NoBlock, "reconfigure");
+    // compositor's compositingToggled signal reports whether the change took effect.
 }
 
 // 2D效果下不支持显示工作区、显示应用程序所有窗口、显示所有窗口等功能，此处调用对话框告知用户
@@ -1264,16 +1246,7 @@ void DeepinWMFaker::setWorkspaceBackgroundForMonitor(const int index, const QStr
 
 bool DeepinWMFaker::isX11Platform()
 {
-    QString strCmd = "loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type";
-    QProcess p;
-    p.start("bash", QStringList() <<"-c" << strCmd);
-    p.waitForFinished();
-    QString result = p.readAllStandardOutput();
-    if (result.replace("\n", "").contains("Type=x11")) {
-        return  true;
-    } else {
-        return  false;
-    }
+    return qEnvironmentVariable("XDG_SESSION_TYPE") == QLatin1String("x11");
 }
 
 void DeepinWMFaker::quitTransientBackground()
@@ -1404,63 +1377,35 @@ void DeepinWMFaker::SetMultiTaskingStatus(bool isActive)
 
 bool DeepinWMFaker::GetIsShowDesktop()
 {
-    return m_isShowDesktop;
+    return QDBusInterface(KWinDBusService, KWinDBusPath, "org.kde.KWin")
+        .property("showingDesktop").toBool();
 }
 
 void DeepinWMFaker::SetShowDesktop(bool isShowDesktop)
 {
-    m_isShowDesktop = isShowDesktop;
+    QDBusInterface(KWinDBusService, KWinDBusPath, "org.kde.KWin")
+        .call(QDBus::NoBlock, "showDesktop", isShowDesktop);
 }
 
-// KF6 兼容性辅助方法实现
+// The GXDE X11 WM exposes the same EWMH desktop and window state as KX11Extras.
 int DeepinWMFaker::getCurrentDesktop() const
 {
-    QDBusInterface kwinInterface("org.kde.KWin", "/VirtualDesktopManager", "org.kde.KWin.VirtualDesktopManager");
-    if (kwinInterface.isValid()) {
-        QDBusReply<QString> reply = kwinInterface.call("current");
-        if (reply.isValid()) {
-            // 需要将桌面 ID 转换为数字
-            // 这里简化处理,假设返回的是数字字符串或需要查询桌面列表
-            QDBusReply<QStringList> rowsReply = kwinInterface.call("rows");
-            QDBusReply<QStringList> columnsReply = kwinInterface.call("columns");
-            if (rowsReply.isValid() && columnsReply.isValid()) {
-                // 简化:返回1作为默认值
-                // 实际应该查询桌面列表并匹配当前桌面ID
-                return 1;
-            }
-        }
-    }
-    return 1; // 默认返回桌面1
+    return KX11Extras::currentDesktop();
 }
 
 int DeepinWMFaker::getNumberOfDesktops() const
 {
-    QDBusInterface kwinInterface("org.kde.KWin", "/VirtualDesktopManager", "org.kde.KWin.VirtualDesktopManager");
-    if (kwinInterface.isValid()) {
-        QDBusReply<QStringList> desktopsReply = kwinInterface.call("desktops");
-        if (desktopsReply.isValid()) {
-            return desktopsReply.value().size();
-        }
-    }
-    return 1; // 默认返回1个桌面
+    return KX11Extras::numberOfDesktops();
 }
 
 void DeepinWMFaker::setCurrentDesktop(int desktop)
 {
-    // KF6 中需要通过 D-Bus 设置虚拟桌面
-    // 由于API限制,这里暂时不实现
-    // 实际应该调用 KWin 的 D-Bus 接口来切换桌面
-    qWarning() << "setCurrentDesktop not fully implemented for KF6";
+    if (desktop >= 1 && desktop <= KX11Extras::numberOfDesktops()) {
+        KX11Extras::setCurrentDesktop(desktop);
+    }
 }
 
 quint32 DeepinWMFaker::getActiveWindow() const
 {
-    QDBusInterface kwinInterface("org.kde.KWin", "/KWin", "org.kde.KWin");
-    if (kwinInterface.isValid()) {
-        QDBusReply<quint32> reply = kwinInterface.call("activeWindow");
-        if (reply.isValid()) {
-            return reply.value();
-        }
-    }
-    return 0;
+    return static_cast<quint32>(KX11Extras::activeWindow());
 }
