@@ -1013,6 +1013,14 @@ void DeepinWMFaker::ShowWorkspace()
     if (maybeShowWarningDialog())
         return;
 
+    // GXDE's X11 workspace overview is provided by KWin. Forward the Deepin
+    // action through the compositor's registered global accelerator.
+    const QString componentPath = QStringLiteral("/component/")
+                                  + QString::fromLatin1(GlobalAccelComponentName).replace('-', '_');
+    QDBusInterface globalAccel(QStringLiteral("org.kde.kglobalaccel"), componentPath,
+                               QStringLiteral("org.kde.kglobalaccel.Component"),
+                               QDBusConnection::sessionBus());
+    globalAccel.call(QDBus::NoBlock, QStringLiteral("invokeShortcut"), QStringLiteral("Overview"));
     Q_EMIT ShowWorkspaceChanged();
 }
 
