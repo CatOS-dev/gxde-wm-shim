@@ -1081,38 +1081,21 @@ void DeepinWMFaker::SwitchToWorkspace(bool backward)
 
 void DeepinWMFaker::PresentWindows(const QList<uint> &xids)
 {
-    if (xids.isEmpty())
+    if (xids.isEmpty()) {
         return;
-
-    // TODO: KF6 中 KWindowEffects::presentWindows 已被移除
-    // 需要通过 D-Bus 或其他方式实现窗口展示功能
-    if (m_isPlatformX11) {
-        // QList<WId> windows;
-        //
-        // for (uint w : xids)
-        //     windows << w;
-        //
-        // KWindowEffects::presentWindows(windows.first(), windows);
-
-        // 使用 D-Bus 作为替代方案
-        QDBusInterface Interface("org.kde.KWin",
-                                 "/org/kde/KWin/PresentWindows",
-                                "org.kde.KWin.PresentWindows",
-                                QDBusConnection::sessionBus());
-        QStringList strList;
-        for (uint w : xids)
-            strList << QString::number(w);
-        Interface.call("PresentWindows",strList);
-    } else {
-        QDBusInterface Interface("org.kde.KWin",
-                                 "/org/kde/KWin/PresentWindows",
-                                "org.kde.KWin.PresentWindows",
-                                QDBusConnection::sessionBus());
-        QStringList strList;
-        for (uint w : xids)
-            strList << QString::number(w);
-        Interface.call("PresentWindows",strList);
     }
+
+    QStringList windowIds;
+    windowIds.reserve(xids.size());
+    for (uint xid : xids) {
+        windowIds << QString::number(xid);
+    }
+
+    QDBusInterface windowView(QStringLiteral("org.kde.KWin.Effect.WindowView1"),
+                              QStringLiteral("/org/kde/KWin/Effect/WindowView1"),
+                              QStringLiteral("org.kde.KWin.Effect.WindowView1"),
+                              QDBusConnection::sessionBus());
+    windowView.call(QStringLiteral("activate"), windowIds);
 }
 
 // TODO(zccrs): 开启/禁用热区
