@@ -969,17 +969,18 @@ void DeepinWMFaker::SetDecorationDeepinTheme(const QString &name)
 
 void DeepinWMFaker::setCompositingEnabled(bool on)
 {
-    if (!compositingAllowSwitch() || compositingEnabled() == on) {
+    if (!compositingAllowSwitch()) {
+        return;
+    }
+
+    QDBusInterface compositor(KWinDBusService, KWinDBusCompositorPath, KWinDBusCompositorInterface);
+    const QDBusReply<void> reply = compositor.call(on ? QStringLiteral("resume") : QStringLiteral("suspend"));
+    if (!reply.isValid()) {
         return;
     }
 
     m_kwinConfig->group("Compositing").writeEntry("Enabled", on);
     m_kwinConfig->sync();
-
-    // KWin 6.7 exposes reconfigure on /KWin, but no suspend/resume on /Compositor.
-    QDBusInterface(KWinDBusService, KWinDBusPath, "org.kde.KWin")
-        .call(QDBus::NoBlock, "reconfigure");
-    // compositor's compositingToggled signal reports whether the change took effect.
 }
 
 // 2D效果下不支持显示工作区、显示应用程序所有窗口、显示所有窗口等功能，此处调用对话框告知用户
